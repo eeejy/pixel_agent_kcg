@@ -13,19 +13,18 @@ import {
   startFileWatching,
 } from '../../server/src/fileWatcher.js';
 import { loadLayout } from '../../server/src/layoutPersistence.js';
-import { CLAUDE_TERMINAL_NAME_PREFIX } from '../../server/src/providers/hook/claude/constants.js';
-import { claudeProvider } from '../../server/src/providers/index.js';
+import { OPENROUTER_TERMINAL_NAME_PREFIX } from '../../server/src/providers/hook/openrouter/constants.js';
+import { openrouterProvider } from '../../server/src/providers/index.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from '../../server/src/timerManager.js';
 import type { AgentState, PersistedAgent } from '../../server/src/types.js';
 
 export function getProjectDirPath(cwd?: string): string {
   // Fall back to home directory when no workspace folder is open (common on Linux/macOS
-  // when VS Code is launched without a folder). The provider's getSessionDirs already
-  // implements the Windows case-insensitive fallback for drive-letter casing.
+  // when VS Code is launched without a folder).
   const workspacePath = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
-  const dirs = claudeProvider.getSessionDirs?.(workspacePath) ?? [];
+  const dirs = openrouterProvider.getSessionDirs?.(workspacePath) ?? [];
   if (dirs.length === 0) {
-    throw new Error('claudeProvider.getSessionDirs returned no directories');
+    throw new Error('openrouterProvider.getSessionDirs returned no directories');
   }
   const projectDir = dirs[0];
   console.log(`[Pixel Agents] Terminal: Project dir: ${workspacePath} → ${projectDir}`);
@@ -52,16 +51,16 @@ export async function launchNewTerminal(
   const folders = vscode.workspace.workspaceFolders;
   // Use home directory as fallback cwd when no workspace is open (common on Linux/macOS).
   // This ensures the terminal starts in a predictable location that matches the project
-  // dir hash Claude Code will use for JSONL transcript files.
+  // dir hash the OpenRouter provider will use for JSONL transcript files.
   const cwd = folderPath || folders?.[0]?.uri.fsPath || os.homedir();
   const isMultiRoot = !!(folders && folders.length > 1);
   const idx = nextTerminalIndexRef.current++;
   const terminal = vscode.window.createTerminal({
-    name: `${CLAUDE_TERMINAL_NAME_PREFIX} #${idx}`,
+    name: `${OPENROUTER_TERMINAL_NAME_PREFIX} #${idx}`,
     cwd,
   });
   // When suppressShow is set (auto-spawn + autoShowPanel), keep the panel view
-  // on Pixel Agents instead of switching to Terminal. Claude Code still runs
+  // on Pixel Agents instead of switching to Terminal. The OpenRouter agent still runs
   // via sendText below; user can click the character to focus the terminal via
   // the existing focusAgent message handler.
   if (!suppressShow) {
@@ -69,11 +68,11 @@ export async function launchNewTerminal(
   }
 
   const sessionId = crypto.randomUUID();
-  const launch = claudeProvider.buildLaunchCommand?.(sessionId, cwd, { bypassPermissions });
+  const launch = openrouterProvider.buildLaunchCommand?.(sessionId, cwd, { bypassPermissions });
   if (!launch) {
-    throw new Error('claudeProvider.buildLaunchCommand is not implemented');
+    throw new Error('openrouterProvider.buildLaunchCommand is not implemented');
   }
-  terminal.sendText([launch.command, ...launch.args].join(' '));
+  terminal.sendText([launch.command, ...launch.args].map(shellQuote).join(' '));
 
   const projectDir = getProjectDirPath(cwd);
 
@@ -374,7 +373,7 @@ export function restoreAgents(
     }
 
     if (p.id > maxId) maxId = p.id;
-    // Extract terminal index from name like "Claude Code #3"
+    // Extract terminal index from name like "OpenRouter Agent #3"
     const match = p.terminalName.match(/#(\d+)$/);
     if (match) {
       const idx = parseInt(match[1], 10);
@@ -430,7 +429,7 @@ export function restoreAgents(
 
   // After a short delay, remove terminal agents that we JUST restored from
   // workspaceState and which never received data. These are dead terminals
-  // restored by VS Code (e.g., after a window reload) where Claude is no
+  // restored by VS Code (e.g., after a window reload) where the provider is no
   // longer running. Only target the IDs the loop above actually added — never
   // pre-existing agents from launchNewTerminal in the same session whose
   // expected JSONL may still be on its way (heuristic /resume waits ~11s).
@@ -587,4 +586,12 @@ export function sendLayout(
     layout: result?.layout ?? null,
     wasReset: result?.wasReset ?? false,
   });
+}
+
+function shellQuote(value: string): string {
+  if (!/[\s"'`$\\]/.test(value)) return value;
+  if (process.platform === 'win32') {
+    return `"${value.replace(/"/g, '\\"')}"`;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

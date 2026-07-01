@@ -31,13 +31,13 @@ It ships in **two flavors from the same source tree**:
 - **VS Code extension** — `pablodelucca.pixel-agents` on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=pablodelucca.pixel-agents) and [Open VSX](https://open-vsx.org/extension/pablodelucca/pixel-agents). Agents spawn into VS Code terminals; characters render in the panel area.
 - **Standalone CLI** — `npx pixel-agents` runs a local Fastify server and serves the office as a browser SPA. Useful in tmux workflows, remote sessions, or any environment without a desktop VS Code.
 
-Internally, the architecture is fully agent-agnostic and platform-agnostic: a typed `HookProvider` interface defines the integration boundary so adding a new AI tool is a single subdirectory of code. Claude Code is the reference implementation today; Codex, Gemini, Cursor, and others are on the roadmap.
+Internally, the architecture is provider-agnostic and platform-agnostic: a typed `HookProvider` interface defines the integration boundary so adding or replacing an AI backend is isolated to a provider module. This fork runs agents through OpenRouter's OpenAI-compatible Chat Completions API and does not require Claude CLI.
 
 ![Pixel Agents screenshot](webview-ui/public/Screenshot.jpg)
 
 ## Features
 
-- **One agent, one character** — every Claude Code terminal gets its own animated character
+- **One agent, one character** — every OpenRouter agent terminal gets its own animated character
 - **Live activity tracking** — characters animate based on what the agent is actually doing (writing, reading, running commands)
 - **Office layout editor** — design your office with floors, walls, and furniture using a built-in editor
 - **Speech bubbles** — visual indicators when an agent is waiting for input or needs permission
@@ -54,7 +54,8 @@ Internally, the architecture is fully agent-agnostic and platform-agnostic: a ty
 ## Requirements
 
 - VS Code 1.105.0 or later
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and configured
+- Node.js 18 or later
+- OpenRouter API key in `OPENROUTER_API_KEY`
 - **Platform**: Windows, Linux, and macOS are supported
 
 ## Getting Started
@@ -71,6 +72,38 @@ npm run build
 ```
 
 Then press **F5** in VS Code to launch the Extension Development Host.
+
+### Configure OpenRouter
+
+Pixel Agents reads OpenRouter settings from your shell environment. The bundled OpenRouter agent also loads a `.env` file from the workspace folder it starts in, so the simplest local setup is:
+
+```env
+OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+```
+
+`OPENROUTER_MODEL` is optional. If it is not set, Pixel Agents uses `openai/gpt-4o-mini` as a small, low-cost default model. You can change it to any OpenRouter chat model slug.
+
+Windows PowerShell:
+
+```powershell
+$env:OPENROUTER_API_KEY="your_api_key_here"
+$env:OPENROUTER_MODEL="openai/gpt-4o-mini"
+```
+
+macOS/Linux:
+
+```bash
+export OPENROUTER_API_KEY="your_api_key_here"
+export OPENROUTER_MODEL="openai/gpt-4o-mini"
+```
+
+Optional generation controls:
+
+```env
+OPENROUTER_TEMPERATURE=0.4
+OPENROUTER_MAX_TOKENS=1024
+```
 
 To try the **standalone CLI** locally:
 
@@ -98,8 +131,8 @@ The staged Vercel output serves the standalone webview at `/webview/` and the Li
 ### Usage
 
 1. Open the **Pixel Agents** panel (it appears in the bottom panel area alongside your terminal)
-2. Click **+ Agent** to spawn a new Claude Code terminal and its character. Right-click for the option to launch with `--dangerously-skip-permissions` (bypasses all tool approval prompts)
-3. Start coding with Claude — watch the character react in real time
+2. Click **+ Agent** to spawn a new OpenRouter agent terminal and its character
+3. Type a prompt in the terminal. The agent sends the conversation to OpenRouter and writes transcript events that Pixel Agents renders in real time
 4. Click a character to select it, then click a seat to reassign it
 5. Click **Layout** to open the office editor and customize your space
 
@@ -129,16 +162,17 @@ Characters are based on the amazing work of [JIK-A-4, Metro City](https://jik-a-
 
 ## How It Works
 
-Pixel Agents has two parallel detection paths:
+Pixel Agents now uses an OpenRouter provider:
 
-- **Hooks mode** (preferred) — Claude Code's official Hooks API POSTs events (`SessionStart`, `PreToolUse`, `Notification`, `Stop`, etc.) to a local Fastify server (`POST /api/hooks/:providerId`). Instant, reliable. Server discovery via `~/.pixel-agents/server.json`.
-- **Heuristic mode** (fallback) — Polls JSONL transcript files at `~/.claude/projects/<project-hash>/<session-id>.jsonl`. Used when hooks aren't installed.
+- **LLM call path** — `server/src/providers/hook/openrouter/openrouterClient.ts` calls `https://openrouter.ai/api/v1/chat/completions` with `system`, `user`, and `assistant` messages.
+- **Agent runner** — `dist/openrouter-agent.js` is launched in a terminal, loads `.env`, checks `OPENROUTER_API_KEY`, sends prompts to OpenRouter, prints replies to stdout, and writes JSONL transcript records.
+- **Transcript path** — JSONL files are stored under `~/.pixel-agents/openrouter/projects/<project-hash>/<session-id>.jsonl`.
 
 A single `HookProvider.normalizeHookEvent(raw)` translates each CLI's hook payload into a canonical `AgentEvent`. The shared `AgentRuntime` dispatches on `AgentEvent.kind`, mutates `AgentStateStore`, and the broadcast layer translates state events into typed `ServerMessage` over the active transport.
 
 The webview runs a lightweight game loop with canvas rendering, BFS pathfinding, and a character state machine (idle → walk → type/read). Everything is pixel-perfect at integer zoom levels. Game state lives in an imperative `OfficeState` class outside React; React components read from it during render but don't own the state.
 
-No modifications to Claude Code are needed — Pixel Agents is purely observational.
+Claude CLI is not invoked and does not need to be installed.
 
 ## Tech Stack
 
@@ -149,20 +183,22 @@ Four-package monorepo, npm workspaces:
 - **`adapters/vscode/`** — VS Code Extension API. Composes `core/` + `server/` for the desktop surface.
 - **`webview-ui/`** — React 19, Vite, Canvas 2D. Transport-agnostic (`PostMessageTransport` in VS Code, `WebSocketTransport` in the browser).
 
-Builds: esbuild (extension + CLI + hook scripts), Vite (webview SPA). Tests: Vitest (server + webview unit), Playwright (e2e against real VS Code + standalone Fastify).
+Builds: esbuild (extension + CLI + OpenRouter agent runner), Vite (webview SPA). Tests: Vitest (server + webview unit), Playwright (e2e against real VS Code + standalone Fastify).
 
 ## Known Limitations
 
-- **Agent-terminal sync** — the way agents are connected to Claude Code terminal instances is not super robust and sometimes desyncs, especially when terminals are rapidly opened/closed or restored across sessions.
-- **Heuristic-based status detection** — Claude Code's JSONL transcript format does not provide clear signals for when an agent is waiting for user input or when it has finished its turn. The current detection is based on heuristics (idle timers, turn-duration events) and often misfires — agents may briefly show the wrong status or miss transitions.
-- **Linux/macOS tip** — if you launch VS Code without a folder open (e.g. bare `code` command), agents will start in your home directory. This is fully supported; just be aware your Claude sessions will be tracked under `~/.claude/projects/` using your home directory as the project root.
+- **Agent-terminal sync** — agents are connected to terminal instances and JSONL files. Rapid terminal close/reopen cycles can still briefly desync until the next scan.
+- **Tool execution** — the OpenRouter runner is a lightweight chat agent. It does not execute local file tools by itself; it provides model responses through the existing Pixel Agents lifecycle.
+- **Linux/macOS tip** — if you launch VS Code without a folder open (e.g. bare `code` command), agents will start in your home directory. This is supported; OpenRouter transcripts will be tracked under `~/.pixel-agents/openrouter/projects/` using your home directory as the project root.
 
 ## Troubleshooting
 
 If your agent appears stuck on idle or doesn't spawn:
 
-1. **Debug View** — In the Pixel Agents panel, click the gear icon (Settings), then toggle **Debug View**. This shows connection diagnostics per agent: JSONL file status, lines parsed, last data timestamp, and file path. If you see "JSONL not found", the extension can't locate the session file.
-2. **Debug Console** — If you're running from source (Extension Development Host via F5), open VS Code's **View > Debug Console**. Search for `[Pixel Agents]` to see detailed logs: project directory resolution, JSONL polling status, path encoding mismatches, and unrecognized JSONL record types.
+1. **Missing API key** — Set `OPENROUTER_API_KEY` in `.env` or your shell. The terminal prints `OPENROUTER_API_KEY is not set` when this is missing.
+2. **Wrong model slug** — Set `OPENROUTER_MODEL` to a valid OpenRouter model slug. If unset, the default is `openai/gpt-4o-mini`.
+3. **Debug View** — In the Pixel Agents panel, click the gear icon (Settings), then toggle **Debug View**. This shows JSONL file status, lines parsed, last data timestamp, and file path.
+4. **Debug Console** — If you're running from source (Extension Development Host via F5), open VS Code's **View > Debug Console**. Search for `[Pixel Agents]` to see project directory resolution, JSONL polling status, and transcript parsing logs.
 
 ## Where This Is Going
 
@@ -178,7 +214,7 @@ The long-term vision is an interface where managing AI agents feels like playing
 For this to work, the architecture needs to be modular at every level:
 
 - **Platform-agnostic**: VS Code extension today, Electron app, web app, or any other host environment tomorrow.
-- **Agent-agnostic**: Claude Code today, but built to support Codex, OpenCode, Gemini, Cursor, Copilot, and others through composable adapters.
+- **Agent-agnostic**: OpenRouter today, but built to support Codex, OpenCode, Gemini, Cursor, Copilot, and others through composable adapters.
 - **Theme-agnostic**: community-created assets, skins, and themes from any contributor.
 
 We're actively working on the core module and adapter architecture that makes this possible. If you're interested to talk about this further, please visit our [Discussions Section](https://github.com/pixel-agents-hq/pixel-agents/discussions).

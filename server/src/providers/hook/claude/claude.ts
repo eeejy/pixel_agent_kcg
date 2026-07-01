@@ -94,13 +94,11 @@ function getSessionDirs(workspacePath: string): string[] {
 }
 
 function buildLaunchCommand(
-  sessionId: string,
-  cwd: string,
-  opts?: { bypassPermissions?: boolean },
+  _sessionId: string,
+  _cwd: string,
+  _opts?: { bypassPermissions?: boolean },
 ): { command: string; args: string[]; env?: Record<string, string> } {
-  const args = ['--session-id', sessionId];
-  if (opts?.bypassPermissions) args.push('--dangerously-skip-permissions');
-  return { command: 'claude', args, env: { PWD: cwd } };
+  throw new Error('Claude CLI launch has been removed. Use the OpenRouter provider instead.');
 }
 
 /** Root that holds every Claude session across all workspaces. Used by the

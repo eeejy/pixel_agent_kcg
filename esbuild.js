@@ -35,34 +35,6 @@ function copyAssets() {
 }
 
 /**
- * Bundle hook scripts (TypeScript) to dist/hooks via esbuild.
- * Produces a self-contained CJS file with shebang for Claude Code to execute.
- */
-function buildHooks() {
-  const entry = path.join(
-    __dirname,
-    'server',
-    'src',
-    'providers',
-    'hook',
-    'claude',
-    'hooks',
-    'claude-hook.ts',
-  );
-  if (!fs.existsSync(entry)) return;
-  require('esbuild').buildSync({
-    entryPoints: [entry],
-    bundle: true,
-    platform: 'node',
-    target: 'node18',
-    format: 'cjs',
-    outdir: path.join(__dirname, 'dist', 'hooks'),
-    banner: { js: '#!/usr/bin/env node' },
-  });
-  console.log('✓ Built hooks/ → dist/hooks/');
-}
-
-/**
  * @type {import('esbuild').Plugin}
  */
 const esbuildProblemMatcherPlugin = {
@@ -84,7 +56,7 @@ const esbuildProblemMatcherPlugin = {
 
 async function main() {
   const ctx = await esbuild.context({
-    entryPoints: ['adapters/vscode/extension.ts'],
+    entryPoints: ['./adapters/vscode/extension.ts'],
     bundle: true,
     format: 'cjs',
     minify: production,
@@ -105,17 +77,17 @@ async function main() {
   } else {
     await ctx.rebuild();
     await ctx.dispose();
-    // Copy assets and hooks after build
+    // Copy assets and bundle runnable CLIs after build
     copyAssets();
-    buildHooks();
     await buildCli();
+    await buildOpenRouterAgentCli();
   }
 }
 
 /** Bundle the standalone CLI entry point. */
 async function buildCli() {
   await esbuild.build({
-    entryPoints: ['server/src/cli.ts'],
+    entryPoints: ['./server/src/cli.ts'],
     bundle: true,
     format: 'cjs',
     minify: production,
@@ -128,6 +100,24 @@ async function buildCli() {
   });
   if (!production) {
     console.log('[build] CLI bundled: dist/cli.mjs');
+  }
+}
+
+/** Bundle the OpenRouter agent runner launched in VS Code terminals. */
+async function buildOpenRouterAgentCli() {
+  await esbuild.build({
+    entryPoints: ['./server/src/providers/hook/openrouter/openrouterAgentCli.ts'],
+    bundle: true,
+    format: 'cjs',
+    minify: production,
+    sourcemap: !production,
+    platform: 'node',
+    outfile: 'dist/openrouter-agent.js',
+    define: versionDefine,
+    logLevel: 'silent',
+  });
+  if (!production) {
+    console.log('[build] OpenRouter agent bundled: dist/openrouter-agent.js');
   }
 }
 

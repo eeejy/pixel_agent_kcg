@@ -37,7 +37,7 @@ import {
   watchLayoutFile,
   writeLayoutToFile,
 } from '../../server/src/layoutPersistence.js';
-import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
+import { openrouterProvider } from '../../server/src/providers/index.js';
 import { PixelAgentsServer } from '../../server/src/server.js';
 import {
   getProjectDirPath,
@@ -71,9 +71,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   // Webview iframe takes ~hundreds of ms to load the React app and attach
   // message handlers. Broadcasts that fire in this window are otherwise lost
   // (webview.postMessage delivers to a window without an active listener).
-  // Buffer them here and flush on `webviewReady`. Without this, on slow CI
-  // runners hook events that arrive during iframe init (mock-claude scenarios
-  // start writing within ~3 s of agent spawn) silently never reach the UI.
+  // Buffer them here and flush on `webviewReady`.
   private isWebviewReady = false;
   private pendingBroadcasts: Array<Record<string, unknown>> = [];
 
@@ -129,7 +127,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     setTerminalAdapter(new VscodeTerminalAdapter());
 
     // Create shared runtime (owns timer Maps, scanners, hook handler, dismissal tracker)
-    this.runtime = new AgentRuntime(this.store, claudeProvider);
+    this.runtime = new AgentRuntime(this.store, openrouterProvider);
 
     this.initServer();
   }
@@ -176,8 +174,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         const hooksEnabled = this.adapter.getSetting<boolean>(GLOBAL_KEY_HOOKS_ENABLED, true);
         this.runtime.hooksEnabled.current = hooksEnabled;
         if (hooksEnabled) {
-          void claudeProvider.installHooks(`http://127.0.0.1:${config.port}`, config.token);
-          copyHookScript(this.context.extensionPath);
+          void openrouterProvider.installHooks(`http://127.0.0.1:${config.port}`, config.token);
         }
         console.log(`[Pixel Agents] Server: ready on port ${config.port}`);
       })
@@ -265,14 +262,13 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         this.runtime.hooksEnabled.current = enabled;
         if (enabled) {
           const serverConfig = this.pixelAgentsServer?.getConfig();
-          void claudeProvider.installHooks(
+          void openrouterProvider.installHooks(
             serverConfig ? `http://127.0.0.1:${serverConfig.port}` : '',
             serverConfig?.token ?? '',
           );
-          copyHookScript(this.context.extensionPath);
           console.log('[Pixel Agents] Hooks enabled by user');
         } else {
-          void claudeProvider.uninstallHooks();
+          void openrouterProvider.uninstallHooks();
           console.log('[Pixel Agents] Hooks disabled by user');
         }
       } else if (message.type === 'setHooksInfoShown') {
@@ -325,8 +321,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         // from the first frame.
         this.webview?.postMessage({
           type: 'providerCapabilities',
-          readingTools: [...claudeProvider.readingTools],
-          subagentToolNames: [...claudeProvider.subagentToolNames],
+          readingTools: [...openrouterProvider.readingTools],
+          subagentToolNames: [...openrouterProvider.subagentToolNames],
         });
         restoreAgents(
           this.adapter,
